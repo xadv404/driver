@@ -1,0 +1,30 @@
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider    = %ProviderName%
+DriverVer   = 06/24/2026,1.0.0.0
+
+[DefaultInstall.NT$ARCH$]
+CopyFiles = Drivers_Dir
+
+[DestinationDirs]
+Drivers_Dir = 12
+
+[Drivers_Dir]
+SelfHideDriver.sys
+
+[DefaultInstall.NT$ARCH$.Services]
+AddService = SelfHideDriver,%SPSVCINST_ASSOCSERVICE%,SelfHideDriver_Inst
+
+[SelfHideDriver_Inst]
+DisplayName   = %SvcDesc%
+ServiceType   = 1          ; SERVICE_KERNEL_DRIVER
+StartType     = 3          ; SERVICE_DEMAND_START
+ErrorControl  = 1          ; SERVICE_ERROR_NORMAL
+ServiceBinary = %12%\SelfHideDriver.sys
+
+[Strings]
+SPSVCINST_ASSOCSERVICE = 0x00000002
+ProviderName            = "CyberSec Lab"
+SvcDesc                 = "Self-Hiding Driver (Educational)"
