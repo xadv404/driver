@@ -1,63 +1,88 @@
-# SelfHideDriver — Driver éducatif (cours cybersécurité)
+# SelfHideDriver — CTF / Cours cybersécurité
 
-Driver noyau Windows qui se retire de `PsLoadedModuleList` au chargement,
-disparaissant ainsi des outils d'énumération standard.
+Driver noyau Windows multi-couches qui se dissimule activement contre des
+adversaires disposant d'un accès noyau.
 
-> **Usage strictement réservé à une VM de laboratoire autorisée.**
+> **Usage réservé à une VM de laboratoire / environnement CTF autorisé.**
+
+---
+
+## Couches de dissimulation implémentées
+
+| # | Technique | Outils trompés |
+|---|---|---|
+| 1 | Retrait de `PsLoadedModuleList` | `driverquery`, `EnumDeviceDrivers`, Process Hacker, WinDbg `lm` |
+| 2 | Effacement des métadonnées LDR (noms, TimeDateStamp, CheckSum) | Scan mémoire brut, `!drvobj`, analyse forensique |
+| 3 | Nettoyage de `MmUnloadedDrivers` | Outils de trace d'historique de déchargement |
+
+---
+
+## Techniques avancées (hors implémentation ici)
+
+### PiDDBCacheTable
+Le noyau maintient une table AVL (`PiDDBCacheTable`) indexée par
+`TimeDateStamp × SizeOfImage` pour chaque driver chargé. Les outils
+comme Process Hacker et certains EDR la consultent pour détecter des
+drivers cachés.
+
+Pour la nettoyer : il faut chercher `PiDDBCacheTable` dans ntoskrnl par
+pattern scan (non exporté, offset variable selon le build), acquérir
+`PiDDBLock` (ERESOURCE), puis supprimer l'entrée de la table AVL avec
+`RtlDeleteElementGenericTableAvl`. C'est la technique la plus efficace
+contre les outils sophistiqués.
+
+### BYOVD (Bring Your Own Vulnerable Driver) comme loader
+Concept : charger un driver **signé** mais vulnérable (donc accepté
+par DSE), exploiter sa primitive de lecture/écriture noyau pour mapper
+manuellement ton propre code en mémoire noyau, puis exécuter ce code
+via un thread système (`PsCreateSystemThread`).
+
+Résultat : ton code s'exécute en ring-0 sans jamais passer par le
+chargement standard — il n'y a donc **aucune entrée** dans
+PsLoadedModuleList, PiDDBCacheTable, ni MmUnloadedDrivers.
+Le driver vulnérable peut être déchargé immédiatement après.
 
 ---
 
 ## Prérequis
 
-- Windows 10/11 **64-bit** en VM
-- [WDK](https://learn.microsoft.com/windows-hardware/drivers/download-the-wdk) correspondant à la version Windows
-- Visual Studio 2022 avec workload "Desktop development with C++"
-- Test signing activé sur la VM :
+- Windows 10/11 VM 64-bit avec test signing :
   ```
   bcdedit /set testsigning on
-  # redémarrer la VM
+  # redémarrer
   ```
-- [Sysinternals DebugView](https://learn.microsoft.com/sysinternals/downloads/debugview) pour voir les `DbgPrint`
+- WDK + Visual Studio 2022 ("Desktop development with C++")
+- Sysinternals DebugView (capture kernel) pour voir les `DbgPrint`
 
 ---
 
-## Build
-
-1. Ouvrir `driver/` dans Visual Studio (ou créer un projet WDM vide et y ajouter les sources)
-2. Configuration : **Debug / x64**
-3. Build → `SelfHideDriver.sys`
-
-### Avec le WDK en ligne de commande (optionnel)
-```
-msbuild SelfHideDriver.vcxproj /p:Configuration=Debug /p:Platform=x64
-```
-
----
-
-## Chargement (en tant qu'administrateur)
+## Build & chargement
 
 ```cmd
-sc create SelfHide type= kernel binPath= "C:\chemin\vers\SelfHideDriver.sys"
+# Compiler avec Visual Studio / MSBuild → SelfHideDriver.sys
+
+sc create SelfHide type= kernel binPath= "C:\...\SelfHideDriver.sys"
 sc start SelfHide
 ```
 
----
+## Vérification (côté attaquant/espion)
 
-## Vérification
+Commandes que le driver doit résister à :
 
-Dans DebugView (cocher *Capture Kernel*) :
-```
-[SelfHide] Driver chargé — dissimulation en cours...
-[SelfHide] Retiré de PsLoadedModuleList
-```
-
-Puis vérifier l'absence dans :
 ```cmd
-driverquery | findstr SelfHide   # rien ne doit apparaître
+driverquery | findstr SelfHide          # doit être vide
 ```
-Et dans Process Explorer → menu View → Show Kernel-mode Drivers.
 
----
+```powershell
+# PowerShell — énumération WMI
+Get-WmiObject Win32_SystemDriver | Where-Object Name -like "*SelfHide*"
+```
+
+En WinDbg (kernel debug) :
+```
+lm                    # ne doit pas apparaître
+!drvobj SelfHide      # doit échouer
+```
 
 ## Déchargement propre
 
@@ -66,16 +91,5 @@ sc stop SelfHide
 sc delete SelfHide
 ```
 
-Le driver se ré-insère dans la liste avant de se décharger pour éviter un BSOD.
-
----
-
-## Concepts illustrés
-
-| Concept | Détail |
-|---|---|
-| `PsLoadedModuleList` | Liste doublement liée des modules noyau chargés |
-| `LDR_DATA_TABLE_ENTRY` | Structure décrivant chaque module (nom, base, taille…) |
-| `RemoveEntryList` | Délie une entrée sans libérer la mémoire |
-| DKOM | Direct Kernel Object Manipulation — manipulation de structures noyau |
-| Restauration au déchargement | Obligatoire pour éviter un accès mémoire invalide (BSOD) |
+La restauration de `PsLoadedModuleList` et le nettoyage de
+`MmUnloadedDrivers` se font automatiquement dans `DriverUnload`.
