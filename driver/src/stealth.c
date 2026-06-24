@@ -266,3 +266,92 @@ VOID ErasePeHeaderPhys(_In_ PVOID ImageBase)
     if (!ImageBase) return;
     PhysZeroRange((ULONG_PTR)ImageBase, PAGE_SIZE);
 }
+
+// ---------------------------------------------------------------------------
+// HideVadRegion — couche 6 : camouflage dans EPROCESS.VadRoot
+//
+// Même avec le PE header effacé et la LDR nettoyée, la région mémoire du
+// driver reste visible comme allocation privée exécutable anonyme dans
+// l'arbre VAD du processus System — c'est ce que cherche EAC (F2).
+//
+// Stratégie : modifier les VadFlags du nœud MMVAD_SHORT trouvé :
+//   - effacer PrivateMemory (bit 51) → plus une allocation privée
+//   - changer VadType (bits 54-56) de VadNone(0) à VadImageMap(2)
+//     → ressemble à un mapping de section légitime
+//
+// On ne supprime PAS le nœud (la rééquilibration AVL n'est pas exportée).
+// La modification des flags n'affecte pas les PTEs réels → exécution OK.
+//
+// Table d'offsets EPROCESS.VadRoot (RTL_AVL_TREE) par build Windows x64 :
+//   17763(1809)=0x628  18362/18363(1903/1909)=0x658  19041+(2004/Win11)=0x7D8
+// ---------------------------------------------------------------------------
+
+typedef struct { ULONG Build; ULONG Offset; } VAD_OFFSET_ENTRY;
+
+static const VAD_OFFSET_ENTRY g_VadOffsets[] = {
+    { 17763, 0x628 },   // Win10 1809
+    { 18362, 0x658 },   // Win10 1903
+    { 18363, 0x658 },   // Win10 1909
+    { 19041, 0x7D8 },   // Win10 2004
+    { 19042, 0x7D8 },   // Win10 20H2
+    { 19043, 0x7D8 },   // Win10 21H1
+    { 19044, 0x7D8 },   // Win10 21H2
+    { 19045, 0x7D8 },   // Win10 22H2
+    { 22000, 0x7D8 },   // Win11 21H2
+    { 22621, 0x7D8 },   // Win11 22H2
+    { 22631, 0x7D8 },   // Win11 23H2
+    { 26100, 0x7D8 },   // Win11 24H2
+};
+
+VOID HideVadRegion(_In_ PVOID ImageBase)
+{
+    if (!ImageBase) return;
+
+    // PsInitialSystemProcess via export table (pas d'extern, pas de dépendance statique)
+    UNICODE_STRING symName = RTL_CONSTANT_STRING(L"PsInitialSystemProcess");
+    PEPROCESS *pSys = (PEPROCESS *)MmGetSystemRoutineAddress(&symName);
+    if (!pSys || !*pSys) return;
+    PEPROCESS eproc = *pSys;
+
+    // Offset VadRoot selon build
+    RTL_OSVERSIONINFOW osv = { sizeof(osv) };
+    if (!NT_SUCCESS(RtlGetVersion(&osv))) return;
+
+    ULONG vadOff = 0;
+    for (ULONG i = 0; i < ARRAYSIZE(g_VadOffsets); i++) {
+        if (g_VadOffsets[i].Build == osv.dwBuildNumber) {
+            vadOff = g_VadOffsets[i].Offset;
+            break;
+        }
+    }
+    if (!vadOff) {
+        if (osv.dwBuildNumber >= 19041) vadOff = 0x7D8;
+        else return;
+    }
+
+    PRTL_AVL_TREE  vadRoot = (PRTL_AVL_TREE)((PUCHAR)eproc + vadOff);
+    ULONG_PTR      ourVpn  = (ULONG_PTR)ImageBase >> PAGE_SHIFT;
+
+    __try {
+        PRTL_BALANCED_NODE node = vadRoot->Root;
+        while (node) {
+            PMMVAD_SHORT vad = (PMMVAD_SHORT)node;
+            ULONG_PTR startVpn = ((ULONG64)vad->StartingVpnHigh << 32) | vad->StartingVpn;
+            ULONG_PTR endVpn   = ((ULONG64)vad->EndingVpnHigh   << 32) | vad->EndingVpn;
+
+            if (ourVpn >= startVpn && ourVpn <= endVpn) {
+                // Nœud trouvé — pool noyau writable directement
+                volatile ULONG64 *pFlags =
+                    (volatile ULONG64 *)((PUCHAR)vad + FIELD_OFFSET(MMVAD_SHORT, VadFlags));
+                ULONG64 flags = *pFlags;
+                flags &= ~(1ULL   << VAD_PRIVATE_MEMORY_BIT);
+                flags &= ~(0x7ULL << VAD_TYPE_SHIFT);
+                flags |=  (VAD_TYPE_IMAGE_MAP << VAD_TYPE_SHIFT);
+                *pFlags = flags;
+                KeMemoryBarrier();
+                break;
+            }
+            node = (ourVpn < startVpn) ? node->Left : node->Right;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) { }
+}

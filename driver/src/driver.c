@@ -132,11 +132,12 @@ VOID DriverUnload(_In_ PDRIVER_OBJECT DriverObject)
 //    6  ObfuscateLdrEntry     — couche 2  : zeroise noms dans LDR
 //    7  ZeroLdrFields         — couche 2b : zeroise champs DllBase etc.
 //    8  CleanRegistryEntry    — couche 5  : supprime clé registre service
-//    9  ErasePeHeaderPhys     — couche 4  : DERNIER — détruit le PE header
+//    9  HideVadRegion         — couche 6  : camouflage dans EPROCESS.VadRoot
+//   10  ErasePeHeaderPhys     — couche 4  : DERNIER — détruit le PE header
 //
 //  Mode kdmapper (DriverObject == NULL) :
 //    Aucune liste touchée par le loader → étapes 2-8 inutiles.
-//    Seule la couche 4 (effacement PE header) est appliquée.
+//    Étapes 9 et 10 appliquées (VAD + PE header effacement).
 //
 // ---------------------------------------------------------------------------
 NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
@@ -168,9 +169,11 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         g_MapperMode = TRUE;
     }
 
-    // Couche 4 EN DERNIER — valide pour les deux modes
-    if (g_ImageBase)
-        ErasePeHeaderPhys(g_ImageBase);        // 9
+    // Couches finales — valides pour les deux modes
+    if (g_ImageBase) {
+        HideVadRegion(g_ImageBase);            // 9
+        ErasePeHeaderPhys(g_ImageBase);        // 10 — EN DERNIER
+    }
 
     return STATUS_SUCCESS;
 }
