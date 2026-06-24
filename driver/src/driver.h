@@ -1,7 +1,6 @@
 #pragma once
 #include <ntddk.h>
 
-// LDR_DATA_TABLE_ENTRY : structure noyau non exportée, stable depuis XP
 typedef struct _LDR_DATA_TABLE_ENTRY {
     LIST_ENTRY InLoadOrderLinks;
     LIST_ENTRY InMemoryOrderLinks;
@@ -20,7 +19,6 @@ typedef struct _LDR_DATA_TABLE_ENTRY {
     ULONG      TimeDateStamp;
 } LDR_DATA_TABLE_ENTRY, *PLDR_DATA_TABLE_ENTRY;
 
-// MM_UNLOADED_DRIVER : historique des 50 derniers drivers déchargés
 typedef struct _MM_UNLOADED_DRIVER {
     UNICODE_STRING  Name;
     PVOID           ModuleStart;
@@ -30,10 +28,11 @@ typedef struct _MM_UNLOADED_DRIVER {
 
 #define MM_UNLOADED_DRIVERS_SIZE 50
 
-VOID HideFromLoadedList(_In_ PDRIVER_OBJECT DriverObject);
-VOID ObfuscateLdrEntry(_In_ PDRIVER_OBJECT DriverObject);
-VOID CleanMmUnloadedDrivers(_In_ PDRIVER_OBJECT DriverObject);
-
-VOID RestoreSelf(VOID);
-VOID DriverUnload(_In_ PDRIVER_OBJECT DriverObject);
+PVOID  FindSelfBase(VOID);
+VOID   HideFromLoadedList(_In_ PDRIVER_OBJECT DriverObject);
+VOID   ObfuscateLdrEntry(_In_ PDRIVER_OBJECT DriverObject);
+VOID   CleanMmUnloadedDrivers(PVOID ImageBase, ULONG ImageSize);
+VOID   ErasePeHeader(PVOID ImageBase);
+VOID   RestoreSelf(VOID);
+VOID   DriverUnload(_In_ PDRIVER_OBJECT DriverObject);
 NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath);
