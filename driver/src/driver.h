@@ -20,19 +20,18 @@ typedef struct _LDR_DATA_TABLE_ENTRY {
 } LDR_DATA_TABLE_ENTRY, *PLDR_DATA_TABLE_ENTRY;
 
 typedef struct _MM_UNLOADED_DRIVER {
-    UNICODE_STRING  Name;
-    PVOID           ModuleStart;
-    PVOID           ModuleEnd;
-    ULONG64         UnloadTime;
+    UNICODE_STRING Name;
+    PVOID          ModuleStart;
+    PVOID          ModuleEnd;
+    ULONG64        UnloadTime;
 } MM_UNLOADED_DRIVER, *PMM_UNLOADED_DRIVER;
 
 #define MM_UNLOADED_DRIVERS_SIZE 50
 
-PVOID  FindSelfBase(VOID);
-VOID   HideFromLoadedList(_In_ PDRIVER_OBJECT DriverObject);
-VOID   ObfuscateLdrEntry(_In_ PDRIVER_OBJECT DriverObject);
-VOID   CleanMmUnloadedDrivers(PVOID ImageBase, ULONG ImageSize);
-VOID   ErasePeHeader(PVOID ImageBase);
-VOID   RestoreSelf(VOID);
-VOID   DriverUnload(_In_ PDRIVER_OBJECT DriverObject);
+PVOID    FindSelfBase(VOID);
+VOID     HideFromLoadedList(_In_ PDRIVER_OBJECT DriverObject);
+VOID     ObfuscateLdrEntry(_In_ PDRIVER_OBJECT DriverObject);
+VOID     CleanMmUnloadedDrivers(PVOID ImageBase, ULONG ImageSize);
+VOID     RestoreSelf(VOID);
+VOID     DriverUnload(_In_ PDRIVER_OBJECT DriverObject);
 NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath);
