@@ -131,8 +131,9 @@ VOID DriverUnload(_In_ PDRIVER_OBJECT DriverObject)
 //                               (LIT DataDirectory → avant ErasePeHeaderPhys)
 //    6  ObfuscateLdrEntry     — couche 2  : zeroise noms dans LDR
 //    7  ZeroLdrFields         — couche 2b : zeroise champs DllBase etc.
+//    7b ZeroDriverObjectName  — couche 2c : zeroise DriverName dans DRIVER_OBJECT
 //    8  CleanRegistryEntry    — couche 5  : supprime clé registre service
-//    9  HideVadRegion         — couche 6  : camouflage dans EPROCESS.VadRoot
+//    9  HideVadRegion         — couche 6  : camouflage VAD (VadDevicePhysicalMemory)
 //   10  ErasePeHeaderPhys     — couche 4  : DERNIER — détruit le PE header
 //
 //  Mode kdmapper (DriverObject == NULL) :
@@ -161,6 +162,7 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         }
         ObfuscateLdrEntry(DriverObject);       // 6
         ZeroLdrFields(ldr);                    // 7
+        ZeroDriverObjectName(DriverObject);    // 7b
         CleanRegistryEntry(RegistryPath);      // 8
 
     } else {

@@ -276,8 +276,9 @@ VOID ErasePeHeaderPhys(_In_ PVOID ImageBase)
 //
 // Stratégie : modifier les VadFlags du nœud MMVAD_SHORT trouvé :
 //   - effacer PrivateMemory (bit 51) → plus une allocation privée
-//   - changer VadType (bits 54-56) de VadNone(0) à VadImageMap(2)
-//     → ressemble à un mapping de section légitime
+//   - changer VadType (bits 54-56) de VadNone(0) à VadDevicePhysicalMemory(1)
+//     → pas de ControlArea requis (contrairement à VadImageMap=2)
+//     → EAC ne cherche pas de pages exécutables dans les mappings device physique
 //
 // On ne supprime PAS le nœud (la rééquilibration AVL n'est pas exportée).
 // La modification des flags n'affecte pas les PTEs réels → exécution OK.
@@ -346,12 +347,34 @@ VOID HideVadRegion(_In_ PVOID ImageBase)
                 ULONG64 flags = *pFlags;
                 flags &= ~(1ULL   << VAD_PRIVATE_MEMORY_BIT);
                 flags &= ~(0x7ULL << VAD_TYPE_SHIFT);
-                flags |=  (VAD_TYPE_IMAGE_MAP << VAD_TYPE_SHIFT);
+                flags |=  (VAD_TYPE_DEVICE_PHYSICAL << VAD_TYPE_SHIFT);
                 *pFlags = flags;
                 KeMemoryBarrier();
                 break;
             }
             node = (ourVpn < startVpn) ? node->Left : node->Right;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) { }
+}
+
+// ---------------------------------------------------------------------------
+// ZeroDriverObjectName — couche 7 : effacement du nom dans DRIVER_OBJECT
+//
+// ObfuscateLdrEntry zeroise les noms dans LDR_DATA_TABLE_ENTRY mais laisse
+// intacts les champs de DRIVER_OBJECT lui-même, notamment DriverName qui
+// est visible via l'Object Manager (\Driver\ namespace) par tout scanner
+// kernel qui énumère les objets driver (ZwQueryDirectoryObject, etc.).
+// ---------------------------------------------------------------------------
+VOID ZeroDriverObjectName(_In_ PDRIVER_OBJECT DriverObject)
+{
+    if (!DriverObject) return;
+    __try {
+        if (DriverObject->DriverName.Buffer && DriverObject->DriverName.Length > 0) {
+            RtlSecureZeroMemory(DriverObject->DriverName.Buffer,
+                                DriverObject->DriverName.Length);
+            DriverObject->DriverName.Length        = 0;
+            DriverObject->DriverName.MaximumLength = 0;
+            DriverObject->DriverName.Buffer        = NULL;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) { }
 }

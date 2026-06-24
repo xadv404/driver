@@ -36,9 +36,9 @@ typedef struct _MMVAD_SHORT {
     ULONG64           VadFlags;         // 0x40
 } MMVAD_SHORT, *PMMVAD_SHORT;
 
-#define VAD_PRIVATE_MEMORY_BIT  51ULL   // bit 51 de VadFlags
-#define VAD_TYPE_SHIFT          54ULL   // bits 54-56
-#define VAD_TYPE_IMAGE_MAP      2ULL    // VadImageMap
+#define VAD_PRIVATE_MEMORY_BIT      51ULL   // bit 51 de VadFlags
+#define VAD_TYPE_SHIFT              54ULL   // bits 54-56
+#define VAD_TYPE_DEVICE_PHYSICAL    1ULL    // VadDevicePhysicalMemory — pas de ControlArea requis
 
 PVOID GetNtoskrnlBase(VOID);
 VOID  CleanHashLinks(_Inout_ PLDR_DATA_TABLE_ENTRY entry);
@@ -47,4 +47,5 @@ VOID  ZeroImportTable(_In_ PVOID ImageBase);
 VOID  CleanPiDDBCache(_In_ PVOID ImageBase);
 VOID  CleanRegistryEntry(_In_ PUNICODE_STRING RegistryPath);
 VOID  HideVadRegion(_In_ PVOID ImageBase);
+VOID  ZeroDriverObjectName(_In_ PDRIVER_OBJECT DriverObject);
 VOID  ErasePeHeaderPhys(_In_ PVOID ImageBase);
